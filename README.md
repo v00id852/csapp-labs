@@ -1,6 +1,6 @@
 # csapp-labs
 
-The repo includes csapp labs I have done right now.
+The repo includes csapp labs I have completed.
 
 For clean lab source code, visit [here](http://csapp.cs.cmu.edu/3e/labs.html)
 
