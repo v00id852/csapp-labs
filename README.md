@@ -2,7 +2,7 @@
 
 The repo includes csapp labs I have done right now.
 
-To get the clean lab source codes, visit [here](http://csapp.cs.cmu.edu/3e/labs.html)
+For clean lab source code, visit [here](http://csapp.cs.cmu.edu/3e/labs.html)
 
 I also wrote some posts including some steps to solve labs and some reading notes.
 
