@@ -9,3 +9,4 @@ I also wrote some posts including some steps to solve labs and some reading note
 ## posts (chinese)
 
 - [datalab](https://lza852.com/posts/2021-08-14-csapp-1/)
+- [bomblab](https://lza852.com/posts/2021-08-17-csapp-2/)
