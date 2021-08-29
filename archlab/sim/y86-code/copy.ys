@@ -1,0 +1,52 @@
+.pos 0
+    irmovq stack, %rsp
+    call main
+    halt
+
+.align 8
+# Source block
+src:
+    .quad 0x00a
+    .quad 0x0b0
+    .quad 0xc00
+
+# Destination block
+dest:
+    .quad 0x111
+    .quad 0x222
+    .quad 0x333
+
+main:
+    irmovq src, %rdi
+    irmovq dest, %rsi
+    irmovq $3, %rdx
+    call copy_block
+    ret
+
+copy_block:
+    pushq %rbx
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    irmovq $0x8, %rbx
+    irmovq $0x1, %r9
+    irmovq $0, %rax
+    irmovq $0, %r10
+loop:
+    subq %r10, %rdx
+    jle end
+    mrmovq (%rdi), %r8
+    rmmovq %r8, (%rsi)
+    addq %rbx, %rdi
+    addq %rbx, %rsi
+    xorq %r8, %rax
+    jmp loop
+end:
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbx
+    ret
+
+    .pos 0x200
+stack:
