@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <memory.h>
+#include <errno.h>
 
 typedef unsigned long long ull;
 
@@ -114,9 +115,64 @@ int parseOpt(int argc, char* argv[], config_t* config) {
     return 0;
 }
 
-int createCache(cache_t* cache) {
+int createCache(cache_t* cache, config_t* config) {
     if (!cache) return -1;
+    cache->sets = malloc(config->sets * sizeof(set_t));
+    if (!cache->sets) {
+        fprintf(stderr, "allocate sets failed: %s\n", strerror(errno));
+        return -2;
+    }
+    memset(cache->sets, 0, sizeof(set_t) * config->sets);
+
+    for(ull i = 0; i < config->sets; ++i) {
+        cache->sets[i].lines = malloc(config->lines * sizeof(line_t));
+        if (!cache->sets[i].lines) {
+            fprintf(stderr, "allocate sets[%llu].lines failed: %s\n", 
+                i, strerror(errno));
+            goto destroy;
+        }
+        for(ull j = 0; j < config->lines; ++j) {
+            cache->sets[i].lines[j].block = malloc(config->block_size);
+            if (!cache->sets[i].lines[j].block) {
+                fprintf(stderr, "allocate sets[%llu].lines[%llu] block failed: %s\n", 
+                    i, j, strerror(errno));
+                goto destroy;
+            }
+        }
+    }
+    return 0;
+destroy:
+    
+    for (ull i = 0; i < config->sets; ++i) {            
+        if (!cache->sets[i].lines) continue;
+        for (ull j = 0; j < config->lines; ++j) {
+            if (!cache->sets[i].lines[j].block) continue;
+            free(cache->sets[i].lines[j].block);
+        }
+        free(cache->sets[i].lines);
+    }
+
+    free(cache->sets);
+    return -1;
 } 
+
+void destroyCache(cache_t* cache, config_t* config) {
+    if (!cache) return;
+    if (!cache->sets) return;
+    for(ull i = 0; i < config->sets; ++i) {
+        for(ull j = 0; j < config->lines; ++j) {
+            if (!cache->sets[i].lines) continue;
+            free(cache->sets[i].lines[j].block);
+        }
+        free(cache->sets[i].lines);
+    }
+    free(cache->sets);
+}
+
+result_t run(config_t* config, cache_t* cache) {
+    result_t res = {0, 0, 0};
+    return res;
+}
 
 int main(int argc, char* argv[])
 {
@@ -138,7 +194,7 @@ int main(int argc, char* argv[])
     }
 
     printConfig(&config);
-    if (createCache(&cache) < 0) {
+    if (createCache(&cache, &config) < 0) {
         return -1;
     }
     
