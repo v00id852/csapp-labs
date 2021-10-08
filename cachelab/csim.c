@@ -17,8 +17,6 @@ typedef unsigned long long ull;
  */
 typedef struct {
     bool verbose;
-    bool is_head, is_tail;
-    ull prev, next;
     ull sets; /**< Number of sets */
     ull lines; /**< Number of lines per set */
     ull block_size; /**< block size */
@@ -33,6 +31,7 @@ typedef struct {
  */
 typedef struct {
     bool valid;
+    line_t *prev, *next;
     ull tag;
     uint8_t* block;
 } line_t;
@@ -42,6 +41,7 @@ typedef struct {
  */
 typedef struct {
     line_t* lines; 
+    line_t head, tail;
 } set_t;
 
 /**
@@ -154,6 +154,10 @@ int createCache(cache_t* cache, config_t* config) {
                 goto destroy;
             }
         }
+        cache->sets[i].head.next = &cache->sets[i].tail;
+        cache->sets[i].head.prev = NULL;
+        cache->sets[i].tail.prev = &cache->sets[i].head;
+        cache->sets[i].tail.next = NULL;
     }
     return 0;
 destroy:
@@ -208,13 +212,30 @@ static line_t* find_a_empty_line(cache_t* cache, config_t* config, unsigned set_
         if (!line->valid) return line;
     }
     return NULL;
-} 
+}
+
+static void lru_move_to_head(set_t* set, line_t* line) {
+    line_t* head = &set->head;
+    line_t* tail = &set->tail;
+    if (line->prev)
+        line->prev->next = line->next;
+    if (line->next)
+        line->next->prev = line->prev;
+
+    // insert after head;
+    line->next = head->next;
+    head->next->prev = line;
+    line->prev = head;
+    head->next = line;
+}
 
 /**
  * Use LRU to evict a line
  */
-static void evict(set_t* set, unsigned line_num) {
-    
+static void evict(set_t* set) {
+    // evict the last one;
+    line_t* last = &set->tail.prev;
+    lru_move_to_head(set, last);
 } 
 
 /**
@@ -261,6 +282,7 @@ void simulate(trace_t* trace, cache_t* cache,
                 printf("hit\n", trace->op, trace->addr, trace->size);
             }
         }
+        lru_move_to_head(&cache->sets[set_index], line);
         return;
     }
     // miss situration
@@ -273,10 +295,13 @@ void simulate(trace_t* trace, cache_t* cache,
                 line_t* line = find_a_empty_line(cache, config, set_index);
                 if (!line) {
                     // eviction
-                    // TODO
+                    res->eviction_count ++;
+                    evict(&cache->sets[set_index]);
+                } else {
+                    lru_move_to_head(&cache->sets[set_index], line);
                 }
                 if (config->verbose) {
-                    if (!line) {
+                    if (line) {
                         printf("L %d,%d miss\n", trace->addr, trace->size);
                     } else {
                         printf("L %d,%d miss eviction\n", trace->addr, trace->size);
@@ -288,10 +313,13 @@ void simulate(trace_t* trace, cache_t* cache,
             // store instruction, if miss, find a empty line
             line_t* line = find_a_empty_line(cache, config, set_index);
             if (!line) {
-                // TODO
+                res->eviction_count ++;
+                evict(&cache->sets[set_index]);
+            } else {
+                lru_move_to_head(&cache->sets[set_index], line);
             }
             if (config->verbose) {
-                if (!line) {
+                if (line) {
                     printf("S %d,%d miss\n", trace->addr, trace->size);
                 } else {
                     printf("S %d,%d miss eviction\n", trace->addr, trace->size);
@@ -317,6 +345,9 @@ void simulate(trace_t* trace, cache_t* cache,
                 if (!found) {
                     // eviction
                     res->eviction_count++;
+                    evict(&cache->sets[set_index]);
+                } else {
+                    lru_move_to_head(&cache->sets[set_index], line);
                 }
                 
                 res->hit_count++;
