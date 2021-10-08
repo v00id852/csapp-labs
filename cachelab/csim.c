@@ -8,6 +8,8 @@
 #include <memory.h>
 #include <errno.h>
 
+#define MAX_LEN 100
+
 typedef unsigned long long ull;
 
 /**
@@ -15,9 +17,14 @@ typedef unsigned long long ull;
  */
 typedef struct {
     bool verbose;
+    bool is_head, is_tail;
+    ull prev, next;
     ull sets; /**< Number of sets */
     ull lines; /**< Number of lines per set */
     ull block_size; /**< block size */
+
+    ull set_bits;
+    ull block_bit;
     FILE* trace_file;
 } config_t;
 
@@ -50,6 +57,12 @@ typedef struct {
     int eviction_count;
 } result_t;
 
+typedef struct {
+    int op;
+    ull addr;
+    int size;
+} trace_t;
+
 void usage() {
     printf("./csim [-hv] -s <s> -E <E> -b <b> -t <tracefile>\n");
 }
@@ -72,16 +85,17 @@ int parseOpt(int argc, char* argv[], config_t* config) {
                 config->verbose = true;
                 break;
             case 's': {
-                int set_index = atol(optarg);
+                int set_index = strtol(optarg, NULL, 10);
                 if (set_index < 0 || set_index >= 64) {
                     fprintf(stderr, "The number of set index bits should be 0 <= index < 32\n");
                     return -2;
                 }
                 config->sets = 1 << set_index;
+                config->set_bits = set_index;
                 break;
             }
             case 'E': {
-                long lines = atol(optarg);
+                long lines = strtol(optarg, NULL, 10);
                 if (lines < 0) {
                     fprintf(stderr, "The number of lines per set should be greater than zero\n");
                     return -3;
@@ -96,6 +110,7 @@ int parseOpt(int argc, char* argv[], config_t* config) {
                     return -4;
                 }
                 config->block_size = 1 << block_index;
+                config->block_bit = block_index;
                 break;
             }
             case 't': {
@@ -169,8 +184,165 @@ void destroyCache(cache_t* cache, config_t* config) {
     free(cache->sets);
 }
 
+/**
+ * Parse a valgrid trace, ignore I operation
+ * 
+ * format: 
+ * I 0400d7d4,8
+ *  M/L/S 0421c7f0,4
+ */
+trace_t parse_trace(char* buf) {
+    trace_t trace = {0, 0, 0};
+    if (buf[0] == 'I') return trace;
+    if (buf[1] != 'M' && buf[1] != 'L' && buf[1] != 'S') return trace;
+    trace.op = buf[1];
+    trace.addr = strtol(buf + 3, NULL, 16);
+    trace.size = strtol(buf + 10, NULL, 10);
+    return trace;
+}
+
+static line_t* find_a_empty_line(cache_t* cache, config_t* config, unsigned set_index) {
+    line_t* line = NULL;
+    for(int i = 0; i < config->lines; ++i) {
+        line = &(cache->sets[set_index].lines[i]);
+        if (!line->valid) return line;
+    }
+    return NULL;
+} 
+
+/**
+ * Use LRU to evict a line
+ */
+static void evict(set_t* set, unsigned line_num) {
+    
+} 
+
+/**
+ * Simulate a cache.
+ * 
+ * Step1: get set index, line tag and block index from the address in the trace.
+ * Step2: judge if the line(s) are valid, and whether the line tag is the same with the tag in the address.
+ * Step3: if tags are same, hit, or miss. In the miss situation, depends on the operation, 
+ *        if the operation is load(L), the cache should load from a lower level cache (one miss plus a possible eviction), 
+ *        if the operation is store(S), one miss plus a possbile eviction (write-allocation),
+ *        if the operation is modify(M), it can be treated as a load followed by a store, so it may result in two cache hits 
+ *        (one load and one store), or a miss and a hit plus a possible eviction (load miss, eviction, and store hit).
+ */
+void simulate(trace_t* trace, cache_t* cache,
+                config_t* config, result_t* res) {
+    if (!trace || !cache || !config || !res) return;
+    if (trace->op == 0) return;
+    // Step1, get set index, line tag and block index from address.
+    ull addr = trace->addr;
+    ull block_index = addr & ((ull)-1 >> (sizeof(ull) - config->block_bit));
+    ull set_index = (addr & ((ull)-1 >> (sizeof(ull) - config->block_bit - config->set_bits))) >> config->block_bit;
+    ull tag = (addr >> (config->block_bit + config->set_bits)) & ((unsigned)-1 >> (config->block_bit + config->set_bits));
+    // Step2
+    bool miss = true;
+    line_t* line = NULL;
+    for(int i = 0; i < config->lines; ++i) {
+        line_t* line = &(cache->sets[set_index].lines[i]);
+        if (line->valid && tag == line->tag) {
+            miss = false;
+            break;
+        }
+    }
+    // Step3
+    // hit situation
+    printf("%c %ul,%d ", trace->op, trace->addr, trace->size);
+    if (!miss) {
+        if (trace->op == 'M') {
+            res->hit_count+=2;
+            if (config->verbose)
+                printf("hit hit\n");
+        } else {
+            res->hit_count++;
+            if (config->verbose) {
+                printf("hit\n", trace->op, trace->addr, trace->size);
+            }
+        }
+        return;
+    }
+    // miss situration
+    res->miss_count++;
+    switch(trace->op) {
+        case 'L':
+            // load instruction, the cache should load from the lower cache.
+            // find a empty line
+            {
+                line_t* line = find_a_empty_line(cache, config, set_index);
+                if (!line) {
+                    // eviction
+                    // TODO
+                }
+                if (config->verbose) {
+                    if (!line) {
+                        printf("L %d,%d miss\n", trace->addr, trace->size);
+                    } else {
+                        printf("L %d,%d miss eviction\n", trace->addr, trace->size);
+                    }
+                }
+                break;
+            }
+        case 'S':
+            // store instruction, if miss, find a empty line
+            line_t* line = find_a_empty_line(cache, config, set_index);
+            if (!line) {
+                // TODO
+            }
+            if (config->verbose) {
+                if (!line) {
+                    printf("S %d,%d miss\n", trace->addr, trace->size);
+                } else {
+                    printf("S %d,%d miss eviction\n", trace->addr, trace->size);
+                }
+            }
+            break;
+        case 'M':
+            // modify instruction, load and store.
+            {
+                printf("M %d,%d miss ", trace->addr, trace->size);
+                // load first;
+                bool found = false;
+                for(int i = 0; i < config->lines; ++i) {
+                    line = &(cache->sets[set_index].lines[i]);
+                    if (!line->valid) {
+                        // find a empty line, store data
+                        line->valid = true;
+                        line->tag = tag;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    // eviction
+                    res->eviction_count++;
+                }
+                
+                res->hit_count++;
+
+                if (config->verbose) {
+                    if (found) {
+                        printf("hit\n");
+                    } else {
+                        printf("eviction hit\n");
+                    }
+                }
+                break;
+            }
+        default: break;
+    }
+} 
+
 result_t run(config_t* config, cache_t* cache) {
     result_t res = {0, 0, 0};
+    char buf[MAX_LEN] = {0};
+
+    while(fgets(buf, sizeof(buf), config->trace_file) != NULL) {
+        trace_t trace = parse_trace(buf);
+        sumulate(&trace, &cache, &config, &res);
+    }
+
     return res;
 }
 
