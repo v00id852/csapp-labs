@@ -29,12 +29,14 @@ typedef struct {
 /**
  * @brief cache line in the set
  */
-typedef struct {
+struct line {
     bool valid;
-    line_t *prev, *next;
+    struct line *prev, *next;
     ull tag;
     uint8_t* block;
-} line_t;
+};
+
+typedef struct line line_t;
 
 /**
  * @brief one set in a cache
@@ -76,6 +78,7 @@ void printConfig(config_t* config) {
 int parseOpt(int argc, char* argv[], config_t* config) {
     if (!config) return -1;
     int opt;
+
 	while((opt = getopt(argc, argv, "hvs:E:b:t:")) != -1) {
 		switch (opt) {
             case 'h':
@@ -200,8 +203,9 @@ trace_t parse_trace(char* buf) {
     if (buf[0] == 'I') return trace;
     if (buf[1] != 'M' && buf[1] != 'L' && buf[1] != 'S') return trace;
     trace.op = buf[1];
-    trace.addr = strtol(buf + 3, NULL, 16);
-    trace.size = strtol(buf + 10, NULL, 10);
+    char* addr_end;
+    trace.addr = strtol(buf + 3, &addr_end, 16);
+    trace.size = strtol(addr_end + 1, NULL, 10);
     return trace;
 }
 
@@ -209,14 +213,16 @@ static line_t* find_a_empty_line(cache_t* cache, config_t* config, unsigned set_
     line_t* line = NULL;
     for(int i = 0; i < config->lines; ++i) {
         line = &(cache->sets[set_index].lines[i]);
-        if (!line->valid) return line;
+        if (!line->valid) {
+            return line;
+        }
     }
     return NULL;
 }
 
 static void lru_move_to_head(set_t* set, line_t* line) {
     line_t* head = &set->head;
-    line_t* tail = &set->tail;
+    // line_t* tail = &set->tail;
     if (line->prev)
         line->prev->next = line->next;
     if (line->next)
@@ -234,7 +240,7 @@ static void lru_move_to_head(set_t* set, line_t* line) {
  */
 static void evict(set_t* set) {
     // evict the last one;
-    line_t* last = &set->tail.prev;
+    line_t* last = set->tail.prev;
     lru_move_to_head(set, last);
 } 
 
@@ -255,14 +261,14 @@ void simulate(trace_t* trace, cache_t* cache,
     if (trace->op == 0) return;
     // Step1, get set index, line tag and block index from address.
     ull addr = trace->addr;
-    ull block_index = addr & ((ull)-1 >> (sizeof(ull) - config->block_bit));
+    // ull block_index = addr & ((ull)-1 >> (sizeof(ull) - config->block_bit));
     ull set_index = (addr & ((ull)-1 >> (sizeof(ull) - config->block_bit - config->set_bits))) >> config->block_bit;
     ull tag = (addr >> (config->block_bit + config->set_bits)) & ((unsigned)-1 >> (config->block_bit + config->set_bits));
     // Step2
     bool miss = true;
     line_t* line = NULL;
     for(int i = 0; i < config->lines; ++i) {
-        line_t* line = &(cache->sets[set_index].lines[i]);
+        line = &(cache->sets[set_index].lines[i]);
         if (line->valid && tag == line->tag) {
             miss = false;
             break;
@@ -270,8 +276,10 @@ void simulate(trace_t* trace, cache_t* cache,
     }
     // Step3
     // hit situation
-    printf("%c %ul,%d ", trace->op, trace->addr, trace->size);
     if (!miss) {
+        if (config->verbose) {
+            printf("%c %llx,%d ", trace->op, trace->addr, trace->size);
+        }
         if (trace->op == 'M') {
             res->hit_count+=2;
             if (config->verbose)
@@ -279,7 +287,7 @@ void simulate(trace_t* trace, cache_t* cache,
         } else {
             res->hit_count++;
             if (config->verbose) {
-                printf("hit\n", trace->op, trace->addr, trace->size);
+                printf("hit\n");
             }
         }
         lru_move_to_head(&cache->sets[set_index], line);
@@ -298,38 +306,43 @@ void simulate(trace_t* trace, cache_t* cache,
                     res->eviction_count ++;
                     evict(&cache->sets[set_index]);
                 } else {
+                    line->valid = true;
+                    line->tag = tag;
                     lru_move_to_head(&cache->sets[set_index], line);
                 }
                 if (config->verbose) {
                     if (line) {
-                        printf("L %d,%d miss\n", trace->addr, trace->size);
+                        printf("L %llx,%d miss\n", trace->addr, trace->size);
                     } else {
-                        printf("L %d,%d miss eviction\n", trace->addr, trace->size);
+                        printf("L %llx,%d miss eviction\n", trace->addr, trace->size);
                     }
                 }
                 break;
             }
-        case 'S':
-            // store instruction, if miss, find a empty line
-            line_t* line = find_a_empty_line(cache, config, set_index);
-            if (!line) {
-                res->eviction_count ++;
-                evict(&cache->sets[set_index]);
-            } else {
-                lru_move_to_head(&cache->sets[set_index], line);
-            }
-            if (config->verbose) {
-                if (line) {
-                    printf("S %d,%d miss\n", trace->addr, trace->size);
+        case 'S': 
+            {
+                // store instruction, if miss, find a empty line
+                line_t* line = find_a_empty_line(cache, config, set_index);
+                if (!line) {
+                    res->eviction_count ++;
+                    evict(&cache->sets[set_index]);
                 } else {
-                    printf("S %d,%d miss eviction\n", trace->addr, trace->size);
+                    line->valid = true;
+                    line->tag = tag;
+                    lru_move_to_head(&cache->sets[set_index], line);
                 }
+                if (config->verbose) {
+                    if (line) {
+                        printf("S %llx,%d miss\n", trace->addr, trace->size);
+                    } else {
+                        printf("S %llx,%d miss eviction\n", trace->addr, trace->size);
+                    }
+                }
+                break;
             }
-            break;
         case 'M':
             // modify instruction, load and store.
-            {
-                printf("M %d,%d miss ", trace->addr, trace->size);
+            {   
                 // load first;
                 bool found = false;
                 for(int i = 0; i < config->lines; ++i) {
@@ -353,6 +366,7 @@ void simulate(trace_t* trace, cache_t* cache,
                 res->hit_count++;
 
                 if (config->verbose) {
+                    printf("M %llx,%d miss ", trace->addr, trace->size);
                     if (found) {
                         printf("hit\n");
                     } else {
@@ -371,7 +385,7 @@ result_t run(config_t* config, cache_t* cache) {
 
     while(fgets(buf, sizeof(buf), config->trace_file) != NULL) {
         trace_t trace = parse_trace(buf);
-        sumulate(&trace, &cache, &config, &res);
+        simulate(&trace, cache, config, &res);
     }
 
     return res;
@@ -382,6 +396,8 @@ int main(int argc, char* argv[])
     config_t config;
     cache_t cache;
     result_t result;
+
+    memset(&config, 0, sizeof(config_t));
 
     if (parseOpt(argc, argv, &config) != 0) {
         usage();
