@@ -22,7 +22,7 @@ typedef struct {
     ull block_size; /**< block size */
 
     ull set_bits;
-    ull block_bit;
+    ull block_bits;
     FILE* trace_file;
 } config_t;
 
@@ -113,7 +113,7 @@ int parseOpt(int argc, char* argv[], config_t* config) {
                     return -4;
                 }
                 config->block_size = 1 << block_index;
-                config->block_bit = block_index;
+                config->block_bits = block_index;
                 break;
             }
             case 't': {
@@ -236,12 +236,15 @@ static void lru_move_to_head(set_t* set, line_t* line) {
 }
 
 /**
- * Use LRU to evict a line
+ * Use LRU to evict a line, return the eivcted line
  */
-static void evict(set_t* set) {
+static line_t* evict(set_t* set) {
     // evict the last one;
     line_t* last = set->tail.prev;
+    last->valid = false;
     lru_move_to_head(set, last);
+    
+    return set->head.next;
 } 
 
 /**
@@ -261,9 +264,10 @@ void simulate(trace_t* trace, cache_t* cache,
     if (trace->op == 0) return;
     // Step1, get set index, line tag and block index from address.
     ull addr = trace->addr;
-    // ull block_index = addr & ((ull)-1 >> (sizeof(ull) - config->block_bit));
-    ull set_index = (addr & ((ull)-1 >> (sizeof(ull) - config->block_bit - config->set_bits))) >> config->block_bit;
-    ull tag = (addr >> (config->block_bit + config->set_bits)) & ((unsigned)-1 >> (config->block_bit + config->set_bits));
+    // ull block_index = addr & ((ull)-1 >> (sizeof(ull) - config->block_bits));
+    ull part = (addr & ((ull)-1 >> (sizeof(ull) * 8 - config->block_bits - config->set_bits)));
+    ull set_index = part >> config->block_bits;
+    ull tag = (addr >> (config->block_bits + config->set_bits)) & ((unsigned)-1 >> (config->block_bits + config->set_bits));
     // Step2
     bool miss = true;
     line_t* line = NULL;
@@ -304,7 +308,9 @@ void simulate(trace_t* trace, cache_t* cache,
                 if (!line) {
                     // eviction
                     res->eviction_count ++;
-                    evict(&cache->sets[set_index]);
+                    line_t* newline = evict(&cache->sets[set_index]);
+                    newline->tag = tag;
+                    newline->valid = true;
                 } else {
                     line->valid = true;
                     line->tag = tag;
@@ -325,7 +331,9 @@ void simulate(trace_t* trace, cache_t* cache,
                 line_t* line = find_a_empty_line(cache, config, set_index);
                 if (!line) {
                     res->eviction_count ++;
-                    evict(&cache->sets[set_index]);
+                    line_t* newline = evict(&cache->sets[set_index]);
+                    newline->tag = tag;
+                    newline->valid = true;
                 } else {
                     line->valid = true;
                     line->tag = tag;
@@ -358,7 +366,9 @@ void simulate(trace_t* trace, cache_t* cache,
                 if (!found) {
                     // eviction
                     res->eviction_count++;
-                    evict(&cache->sets[set_index]);
+                    line_t* newline = evict(&cache->sets[set_index]);
+                    newline->tag = tag;
+                    newline->valid = true;
                 } else {
                     lru_move_to_head(&cache->sets[set_index], line);
                 }
@@ -412,7 +422,6 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    printConfig(&config);
     if (createCache(&cache, &config) < 0) {
         return -1;
     }
